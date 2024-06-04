@@ -39,16 +39,37 @@ def open_chrome():
 
 # Function to initialize the Chrome WebDriver instance
 def init_driver():
-    chrome_options = webdriver.ChromeOptions()
-    chrome_options.add_argument("webdriver.chrome.driver=" + chrome_driver_path)
-    chrome_options.add_experimental_option("debuggerAddress", "127.0.0.1:9222")  # Use the correct port
-    driver = webdriver.Chrome(options=chrome_options)
-    driver.get("https://admin.servicefusion.com/jobs")
+    max_retries = 3
+    retry_count = 0
+    while retry_count < max_retries:
+        try:
+            chrome_options = webdriver.ChromeOptions()
+            chrome_options.add_argument("webdriver.chrome.driver=" + chrome_driver_path)
+            chrome_options.add_experimental_option("debuggerAddress", "127.0.0.1:9222")  # Use the correct port
+            driver = webdriver.Chrome(options=chrome_options)
+            driver.get("https://admin.servicefusion.com/jobs")
 
-    # Wait for 7 seconds before proceeding
-    time.sleep(7)
+            # Wait for 7 seconds before proceeding
+            time.sleep(7)
 
-    return driver
+            return driver
+        except Exception as e:
+            retry_count += 1
+            print(f"Error initializing WebDriver (attempt {retry_count}/{max_retries}): {e}")
+            if retry_count == max_retries:
+                raise
+            else:
+                # Close any existing Chrome instances
+                os.system("taskkill /f /im chrome.exe")
+                
+                # Wait for a short delay before retrying
+                time.sleep(5)
+                
+                # Open a new Chrome instance with remote debugging enabled
+                subprocess.Popen([r"C:\Program Files\Google\Chrome\Application\chrome.exe", "--remote-debugging-port=9222"])
+                
+                # Wait for a short delay to ensure Chrome is opened
+                time.sleep(5)
 
 # Path to the Notepad file
 notepad_path = r"C:\Users\zulema\Documents\invoices.txt"
@@ -95,14 +116,15 @@ def paste_folder_and_additional_actions(driver, folder_name):
         activate_file_explorer_popup()
         pyautogui.press('backspace')
         pyautogui.hotkey('ctrl', 'v')
-        time.sleep(1)
+        time.sleep(2)
         pyautogui.press('enter')
 
         # Add a delay to give time for a potential error message to appear
-        time.sleep(1)
+        time.sleep(3)
 
         # Rest of your existing code to select all items and perform the upload
         for _ in range(11):
+            time.sleep(0.05)
             pyautogui.press('tab')
         pyautogui.hotkey('ctrl', 'a')
         pyautogui.press('enter')
@@ -131,12 +153,12 @@ def paste_folder_and_additional_actions(driver, folder_name):
             with open(ghost_file_path, "a") as ghost_file:
                 ghost_file.write(folder_name + ": File too large\n")
 
-        start_button = WebDriverWait(driver, 10).until(
+        start_button = WebDriverWait(driver, 20).until(
             EC.presence_of_element_located((By.CSS_SELECTOR, ".btn.plupload_start"))
         )
         start_button.click()
 
-        WebDriverWait(driver, 25).until(
+        WebDriverWait(driver, 30).until(
             EC.presence_of_element_located((By.CSS_SELECTOR, "li.plupload_droptext"))
         )
 
@@ -199,75 +221,91 @@ def send_email(message):
         print(f"Error sending email: {e}")
 
 def process_invoice(driver, folder_name, line_number):
-    try:
-        search_bar = driver.find_element("id", "global-search-box")
-        search_bar.clear()
-        search_bar.send_keys(folder_name)
-
-        wait = WebDriverWait(driver, 25)
-
+    max_retries = 3
+    retry_count = 0
+    while retry_count < max_retries:
         try:
-            drop_down_result = wait.until(EC.presence_of_element_located((By.ID, "ui-id-2")))
-        except TimeoutException:
-            print(f"Failed to find dropdown element for folder {folder_name}")
-            with open(ghost_file_path, "a") as ghost_file:
-                ghost_file.write(folder_name + "\n")
-            # Send an email with the error details
-            error_message = f"Failed to find dropdown element for folder {folder_name}:\n{traceback.format_exc()}"
-            send_email(error_message)
-            return False
-        except WebDriverException as e:
-            # If Chrome crashes or becomes unresponsive, restart the driver instance
-            if "out of memory" in str(e) or "unknown error" in str(e):
-                print("Chrome has crashed or become unresponsive. Restarting the driver instance...")
-                driver.quit()
-                driver = init_driver()
-                # Send an email notification
-                error_message = f"Chrome crashed or became unresponsive. Restarting the driver instance.\n{traceback.format_exc()}"
+            search_bar = driver.find_element("id", "global-search-box")
+            search_bar.clear()
+            search_bar.send_keys(folder_name)
+
+            wait = WebDriverWait(driver, 25)
+
+            try:
+                drop_down_result = wait.until(EC.presence_of_element_located((By.ID, "ui-id-2")))
+            except TimeoutException:
+                print(f"Failed to find dropdown element for folder {folder_name}")
+                with open(ghost_file_path, "a") as ghost_file:
+                    ghost_file.write(folder_name + "\n")
+                # Send an email with the error details
+                error_message = f"Failed to find dropdown element for folder {folder_name}:\n{traceback.format_exc()}"
                 send_email(error_message)
                 return False
+            except WebDriverException as e:
+                # If Chrome crashes or becomes unresponsive, restart the driver instance
+                if "out of memory" in str(e) or "unknown error" in str(e):
+                    print("Chrome has crashed or become unresponsive. Restarting the driver instance...")
+                    driver.quit()
+                    driver = init_driver()
+                    # Send an email notification
+                    error_message = f"Chrome crashed or became unresponsive. Restarting the driver instance.\n{traceback.format_exc()}"
+                    send_email(error_message)
+                    return False
+                else:
+                    raise e
+
+            # Check for the specific element with the class and text
+            is_customers_element_present = False
+            try:
+                customers_element = driver.find_element(By.XPATH, "//li[contains(@class, 'ui-autocomplete-category') and contains(text(), 'Customers')]")
+                if customers_element.is_displayed():
+                    is_customers_element_present = True
+            except:
+                pass
+
+            if is_customers_element_present:
+                drop_down_result = wait.until(EC.presence_of_element_located((By.ID, "ui-id-3")))
+
+            drop_down_result.click()
+
+            pictures_tab = driver.find_element("id", "pictures-title")
+            pictures_tab.click()
+
+            upload_btn = driver.find_element("id", "upload-btn")
+            upload_btn.click()
+
+            browse_button = driver.find_element("id", "plupload-upload-image_browse")
+            browse_button.click()
+
+            upload_successful = paste_folder_and_additional_actions(driver, folder_name)
+            
+            if upload_successful:
+                with open(done_file_path, "a") as done_file:
+                    done_file.write(folder_name + "\n")
             else:
-                raise e
-
-        # Check for the specific element with the class and text
-        is_customers_element_present = False
-        try:
-            customers_element = driver.find_element(By.XPATH, "//li[contains(@class, 'ui-autocomplete-category') and contains(text(), 'Customers')]")
-            if customers_element.is_displayed():
-                is_customers_element_present = True
-        except:
-            pass
-
-        if is_customers_element_present:
-            drop_down_result = wait.until(EC.presence_of_element_located((By.ID, "ui-id-3")))
-
-        drop_down_result.click()
-
-        pictures_tab = driver.find_element("id", "pictures-title")
-        pictures_tab.click()
-
-        upload_btn = driver.find_element("id", "upload-btn")
-        upload_btn.click()
-
-        browse_button = driver.find_element("id", "plupload-upload-image_browse")
-        browse_button.click()
-
-        upload_successful = paste_folder_and_additional_actions(driver, folder_name)
-        
-        if upload_successful:
-            with open(done_file_path, "a") as done_file:
-                done_file.write(folder_name + "\n")
-        else:
-            return False
-        
-        # Add a short delay to allow the task to close completely
-        time.sleep(2)
-        
-        return True
-    except Exception as e:
-        print(f"Failed to process invoice {folder_name}. Error: {e}")
-        # Handle the exception (e.g., logging, sending an email)
-        return False
+                return False
+            
+            # Add a short delay to allow the task to close completely
+            time.sleep(2)
+            
+            return True
+        except Exception as e:
+            retry_count += 1
+            print(f"Failed to process invoice {folder_name}. Error: {e}")
+            if retry_count == max_retries:
+                print(f"Skipping invoice {folder_name} after {max_retries} retries.")
+                with open(ghost_file_path, "a") as ghost_file:
+                    ghost_file.write(folder_name + "\n")
+                return False
+            else:
+                # Wait for a short delay before retrying
+                time.sleep(5)
+                
+                # Restart the WebDriver if there is a connection issue
+                if "Connection refused" in str(e) or "Max retries exceeded" in str(e):
+                    print("Restarting the WebDriver due to a connection issue...")
+                    driver.quit()
+                    driver = init_driver()
 
 # Main execution starts
 with open(notepad_path, "r") as notepad_file:
@@ -275,30 +313,36 @@ with open(notepad_path, "r") as notepad_file:
 
 invoices_processed = 0
 last_processed_line = 0
+consecutive_errors = 0
+max_consecutive_errors = 5
 
 open_chrome()
 driver = init_driver()
 
-while True:
-    with open(notepad_path, "r") as notepad_file:
-        for line_number, line in enumerate(notepad_file, start=1):
-            if line_number <= last_processed_line:
-                continue  # Skip already processed invoices
+with open(notepad_path, "r") as notepad_file:
+    for line_number, line in enumerate(notepad_file, start=1):
+        if line_number <= last_processed_line:
+            continue  # Skip already processed invoices
+        
+        folder_name = line.strip()
+        success = process_invoice(driver, folder_name, line_number)
+        
+        if success:
+            invoices_processed += 1
+            last_processed_line = line_number  # Update the last processed line number
+            consecutive_errors = 0  # Reset the consecutive error count
+            percentage_done = round((invoices_processed / total_invoices) * 100, 2)
+            print(f"Processed {invoices_processed}/{total_invoices} invoices ({percentage_done}%)")
+        else:
+            print(f"Skipping invoice {folder_name} due to an error.")
+            consecutive_errors += 1
             
-            folder_name = line.strip()
-            success = process_invoice(driver, folder_name, line_number)
-            
-            if success:
-                invoices_processed += 1
-                last_processed_line = line_number  # Update the last processed line number
-                percentage_done = round((invoices_processed / total_invoices) * 100, 2)
-                print(f"Processed {invoices_processed}/{total_invoices} invoices ({percentage_done}%)")
-            else:
-                print(f"Skipping invoice {folder_name} due to an error.")
-                break  # Break out of the inner loop to restart the script from the last processed line
-
-    if invoices_processed == total_invoices:
-        break  # Break out of the outer loop if all invoices have been processed
+            if consecutive_errors >= max_consecutive_errors:
+                print(f"Encountered {max_consecutive_errors} consecutive errors. Closing and reopening Chrome.")
+                driver.quit()
+                open_chrome()
+                driver = init_driver()
+                consecutive_errors = 0  # Reset the consecutive error count
 
 # Send email when script finishes
 utc_time = datetime.datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
